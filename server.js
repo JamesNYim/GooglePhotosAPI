@@ -41,27 +41,20 @@ function ensureAuth(req, res, next) {
 
 // Start OAuth process
 app.get('/auth/google', (req, res) => {
-    console.log("/auth/google hit");
     const authUrl = oauth2Client.generateAuthUrl({
         access_type: 'offline',
         prompt: 'consent',
         scope: ['https://www.googleapis.com/auth/photospicker.mediaitems.readonly'],
     });
-    console.log('Credentials:', oauth2Client.credentials);
-    console.log("redirecting to: ", authUrl);
     res.redirect(authUrl);
 });
 
 // OAuth Callback storing tokens and redirecting
 app.get('/auth/google/callback', async (req, res) => {
-    console.log('▶️ /auth/google/callback hit, query:', req.query);
     try { 
         const { tokens } = await oauth2Client.getToken(req.query.code);
-        console.log("TOKENS: ", tokens);
         oauth2Client.setCredentials(tokens);
-        console.log('📋 oauth2Client.credentials after setCredentials():', oauth2Client.credentials);
         fs.writeFileSync(TOKEN_JSON, JSON.stringify(tokens, null, 2));
-        console.log('💾 token.json contents:', fs.readFileSync(TOKEN_JSON, 'utf8'));
         return res.redirect('/picker'); } 
     catch (error) { 
         console.error('CALLBACK ERROR:', error); 
@@ -87,18 +80,30 @@ app.post('/picker/sessions', ensureAuth, async (req, res) => {
 });
 
 // Poll a picker session's status
-app.get('picker/sessions/:sessionId', ensureAuth, async (req, res) => {
-    const token = oauth2Client.credentials.access_token;
+app.get('/picker/sessions/:sessionId', ensureAuth, async (req, res) => {
+    const sessionId = req.params.sessionId;
+    console.log(`=> GET /picker/sessions${sessionId}`);
+
     try {
-        const { data } = await axios.get(
-            `https://photopicker.googleapis.com/v1/sessions${req.params.sessionId}`,
-            { headers: { Authorization: `Bearer ${token}`} }
-        );
+        const accessTokenRes = await oauth2Client.getAccessToken();
+        const token = accessTokenRes.token;
+        console.log('=> Using access token: ', token);
+
+        if (!token) {
+            console.log('X No token Available');
+            return res.status(401).json({ error: 'No access token available' });
+        }
+        const url = `https://photospicker.googleapis.com/v1/sessions/${sessionId}`;
+        const { data } = await axios.get(url, { headers: { Authorization: `Bearer ${token}`}});
+        console.log('=> Sessions.get succeeded: ', data);
         return res.json(data);
     }
     catch (error) {
-        console.error('sessions.get failed: ', error.response?.data);
-        return res.status(500).json({ error: 'Could not get Picker session' });
+        console.error('X sessions.get failed: body = ', error.response?.data);
+        console.error('X sessions.get failed: status = ', error.response?.status);
+        return res
+            .status(error.response?.status || 500)
+            .json(error.response?.data || { error: error.message });
     }
 });
 
